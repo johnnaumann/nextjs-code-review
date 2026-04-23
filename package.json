@@ -1,0 +1,65 @@
+{
+  "name": "nextjs-code-review",
+  "version": "0.1.0",
+  "description": "Local-LLM code review CLI for Next.js branches, powered by Ollama and Vercel agent-skills",
+  "keywords": [
+    "code-review",
+    "nextjs",
+    "ollama",
+    "llm",
+    "cli",
+    "react",
+    "agent-skills"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "nextjs-code-review": "dist/cli.js",
+    "code-review": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build",
+    "release:patch": "npm version patch && git push --follow-tags",
+    "release:minor": "npm version minor && git push --follow-tags",
+    "release:major": "npm version major && git push --follow-tags"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "commander": "^14.0.1",
+    "gray-matter": "^4.0.3",
+    "ora": "^8.2.0",
+    "simple-git": "^3.28.0",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
+
