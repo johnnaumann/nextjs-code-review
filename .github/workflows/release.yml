@@ -1,6 +1,11 @@
 name: release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g. 0.1.1). Leave blank to publish current package.json version."
+        required: false
   push:
     tags:
       - "v*"
@@ -18,6 +23,9 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
       - run: npm ci
+      - name: Bump version (optional)
+        if: ${{ inputs.version != '' }}
+        run: npm version "${{ inputs.version }}" --no-git-tag-version
       - run: npm run typecheck && npm test && npm run build
       - run: npm publish --provenance --access public
         env:
