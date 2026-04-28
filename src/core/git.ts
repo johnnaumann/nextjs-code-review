@@ -12,6 +12,88 @@ export type FileDiff = {
   patch: string;
 };
 
+export type SkippedDiff = {
+  path: string;
+  reason: "empty" | "generated" | "trivial";
+};
+
+export type DiffResult = {
+  diffs: FileDiff[];
+  skipped: SkippedDiff[];
+};
+
+const GENERATED_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)node_modules\//,
+  /(^|\/)dist\//,
+  /(^|\/)build\//,
+  /(^|\/)\.next\//,
+  /(^|\/)out\//,
+  /(^|\/)coverage\//,
+  /(^|\/)src\/gen\//,
+  /(^|\/)__generated__\//,
+  /\.generated\.[a-zA-Z]+$/,
+  /\.min\.(js|css)$/,
+  /\.lock$/,
+  /(^|\/)yarn\.lock$/,
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /(^|\/)bun\.lockb?$/,
+  /\.snap$/
+];
+
+const BINARY_EXTS = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".avif",
+  ".ico",
+  ".pdf",
+  ".zip",
+  ".gz",
+  ".tgz",
+  ".tar",
+  ".bz2",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".eot",
+  ".mp3",
+  ".mp4",
+  ".webm",
+  ".mov",
+  ".wasm"
+]);
+
+export function isGeneratedPath(p: string): boolean {
+  if (BINARY_EXTS.has(path.extname(p).toLowerCase())) return true;
+  return GENERATED_PATTERNS.some((re) => re.test(p));
+}
+
+/** Concatenate the added-line bodies in a unified diff (excluding the +++ header). */
+export function patchAddedBody(patch: string): string {
+  const lines = patch.split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("+++ ")) continue;
+    if (line.startsWith("+")) out.push(line.slice(1));
+  }
+  return out.join("\n");
+}
+
+/**
+ * A patch is "trivial" if its added body has effectively no semantic content,
+ * e.g. an empty new barrel file, whitespace-only addition, or pure deletions.
+ */
+export function isLikelyTrivialPatch(patch: string): boolean {
+  const added = patchAddedBody(patch);
+  const stripped = added.replace(/\s+/g, "");
+  if (stripped.length === 0) return true;
+  if (/^new file mode/m.test(patch) && stripped.length < 20) return true;
+  return false;
+}
+
 function gitClient(cwd: string): SimpleGit {
   return simpleGit({ baseDir: cwd });
 }
@@ -19,7 +101,6 @@ function gitClient(cwd: string): SimpleGit {
 export async function detectDefaultRemoteHeadRef(git: SimpleGit): Promise<string | null> {
   try {
     const raw = await git.raw(["symbolic-ref", "refs/remotes/origin/HEAD"]);
-    // refs/remotes/origin/main
     const ref = raw.trim().replace(/^refs\/remotes\//, "");
     return ref || null;
   } catch {
@@ -43,7 +124,28 @@ export function parseNameOnlyLines(raw: string): string[] {
   return parseNameOnly(raw);
 }
 
-export async function getDiff(cwd: string, mode: DiffMode): Promise<FileDiff[]> {
+function classify(file: FileDiff): SkippedDiff["reason"] | null {
+  if (file.patch.trim().length === 0) return "empty";
+  if (isGeneratedPath(file.path)) return "generated";
+  if (isLikelyTrivialPatch(file.patch)) return "trivial";
+  return null;
+}
+
+function partition(files: FileDiff[]): DiffResult {
+  const diffs: FileDiff[] = [];
+  const skipped: SkippedDiff[] = [];
+  for (const f of files) {
+    const reason = classify(f);
+    if (reason) {
+      skipped.push({ path: f.path, reason });
+    } else {
+      diffs.push(f);
+    }
+  }
+  return { diffs, skipped };
+}
+
+export async function getDiff(cwd: string, mode: DiffMode): Promise<DiffResult> {
   const git = gitClient(cwd);
 
   if (mode.kind === "staged") {
@@ -54,7 +156,7 @@ export async function getDiff(cwd: string, mode: DiffMode): Promise<FileDiff[]> 
       const patch = await git.raw(["diff", "--staged", "--", p]);
       out.push({ path: p, patch });
     }
-    return out.filter((d) => d.patch.trim().length > 0);
+    return partition(out);
   }
 
   if (mode.kind === "commit") {
@@ -62,25 +164,15 @@ export async function getDiff(cwd: string, mode: DiffMode): Promise<FileDiff[]> 
     const names = parseNameOnly(namesRaw);
     const out: FileDiff[] = [];
     for (const p of names) {
-      const patch = await git.raw([
-        "show",
-        "--pretty=format:",
-        mode.sha,
-        "--",
-        p
-      ]);
+      const patch = await git.raw(["show", "--pretty=format:", mode.sha, "--", p]);
       out.push({ path: p, patch });
     }
-    return out.filter((d) => d.patch.trim().length > 0);
+    return partition(out);
   }
 
   // branch diff vs base
-  const base =
-    mode.base ??
-    (await detectDefaultRemoteHeadRef(git)) ??
-    "origin/main";
+  const base = mode.base ?? (await detectDefaultRemoteHeadRef(git)) ?? "origin/main";
 
-  // Ensure base is a ref that exists locally; if not, try origin/master.
   const baseCandidates = [base, "origin/main", "origin/master"];
   let chosenBase: string | null = null;
   for (const candidate of baseCandidates) {
@@ -93,9 +185,7 @@ export async function getDiff(cwd: string, mode: DiffMode): Promise<FileDiff[]> 
     }
   }
   if (!chosenBase) {
-    throw new Error(
-      `Could not resolve base ref. Tried: ${baseCandidates.join(", ")}`
-    );
+    throw new Error(`Could not resolve base ref. Tried: ${baseCandidates.join(", ")}`);
   }
 
   const namesRaw = await git.raw(["diff", "--name-only", `${chosenBase}...HEAD`]);
@@ -103,11 +193,9 @@ export async function getDiff(cwd: string, mode: DiffMode): Promise<FileDiff[]> 
 
   const out: FileDiff[] = [];
   for (const p of names) {
-    // avoid weird path traversal in output path; git should only output repo paths
     const safe = p.split(path.sep).join("/");
     const patch = await git.raw(["diff", `${chosenBase}...HEAD`, "--", safe]);
     out.push({ path: safe, patch });
   }
-  return out.filter((d) => d.patch.trim().length > 0);
+  return partition(out);
 }
-

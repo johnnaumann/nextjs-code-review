@@ -16,6 +16,10 @@ export function resolveCodeReviewDir(): string {
   return path.join(process.cwd(), ".code-review");
 }
 
+export function resolveCacheDir(): string {
+  return path.join(process.cwd(), ".code-review", "cache");
+}
+
 export function resolveSkillsLockPath(skillsDir: string): string {
   return path.join(skillsDir, ".lock.json");
 }

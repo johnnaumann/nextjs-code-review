@@ -3,35 +3,73 @@ import path from "node:path";
 
 import matter from "gray-matter";
 
+export type RuleImpact = "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+
 export type LoadedRule = {
+  /** Path relative to the skill dir, e.g. "rules/rerender-memo.md". */
   path: string;
+  title?: string | undefined;
+  impact: RuleImpact;
+  tags: string[];
+  /** Markdown body with frontmatter stripped. */
   body: string;
 };
 
 export type LoadedSkill = {
   name: string;
   description?: string | undefined;
+  /** SKILL.md body with frontmatter stripped. */
   skillBody: string;
   rules: LoadedRule[];
 };
+
+const RULES_DIRNAME = "rules";
 
 async function listSubdirs(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   return entries.filter((e) => e.isDirectory()).map((e) => path.join(dir, e.name));
 }
 
-async function listMarkdownFilesRecursive(dir: string): Promise<string[]> {
+async function listMarkdownFilesIn(dir: string): Promise<string[]> {
   const out: string[] = [];
+  const exists = await stat(dir).catch(() => null);
+  if (!exists) return out;
   const entries = await readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     const p = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...(await listMarkdownFilesRecursive(p)));
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
-      out.push(p);
+      out.push(...(await listMarkdownFilesIn(p)));
+      continue;
     }
+    if (!entry.isFile()) continue;
+    const lower = entry.name.toLowerCase();
+    if (!lower.endsWith(".md")) continue;
+    if (entry.name.startsWith("_")) continue;
+    out.push(p);
   }
   return out;
+}
+
+function parseTags(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((v) => String(v).trim().toLowerCase())
+      .filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function parseImpact(value: unknown): RuleImpact {
+  if (typeof value !== "string") return "UNKNOWN";
+  const v = value.trim().toUpperCase();
+  if (v === "HIGH" || v === "MEDIUM" || v === "LOW") return v;
+  return "UNKNOWN";
 }
 
 export async function loadSkillFromDir(skillDir: string): Promise<LoadedSkill> {
@@ -42,25 +80,38 @@ export async function loadSkillFromDir(skillDir: string): Promise<LoadedSkill> {
     throw new Error(`Missing SKILL.md for skill '${name}' at ${skillMdPath}: ${String(e)}`);
   });
 
-  const parsed = matter(skillMd);
+  const parsedSkill = matter(skillMd);
   const description =
-    typeof parsed.data?.description === "string" ? parsed.data.description : undefined;
+    typeof parsedSkill.data?.description === "string"
+      ? parsedSkill.data.description
+      : undefined;
 
-  const files = await listMarkdownFilesRecursive(skillDir);
-  const ruleFiles = files
-    .filter((p) => p !== skillMdPath)
-    .sort((a, b) => a.localeCompare(b));
+  const rulesDir = path.join(skillDir, RULES_DIRNAME);
+  const ruleFilePaths = (await listMarkdownFilesIn(rulesDir)).sort((a, b) =>
+    a.localeCompare(b)
+  );
 
   const rules: LoadedRule[] = [];
-  for (const p of ruleFiles) {
-    const body = await readFile(p, "utf8");
-    rules.push({ path: path.relative(skillDir, p), body });
+  for (const p of ruleFilePaths) {
+    const raw = await readFile(p, "utf8");
+    const parsed = matter(raw);
+    const data = (parsed.data ?? {}) as Record<string, unknown>;
+    const title = typeof data.title === "string" ? data.title : undefined;
+
+    const rule: LoadedRule = {
+      path: path.relative(skillDir, p),
+      ...(title !== undefined ? { title } : {}),
+      impact: parseImpact(data.impact),
+      tags: parseTags(data.tags),
+      body: parsed.content.trim()
+    };
+    rules.push(rule);
   }
 
   return {
     name,
-    description,
-    skillBody: parsed.content.trimEnd(),
+    ...(description !== undefined ? { description } : {}),
+    skillBody: parsedSkill.content.trimEnd(),
     rules
   };
 }
@@ -81,4 +132,3 @@ export async function loadSkills(skillsDir: string, names?: string[]): Promise<L
   }
   return loaded;
 }
-

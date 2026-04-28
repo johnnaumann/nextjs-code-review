@@ -1,11 +1,24 @@
 export function buildSystemPrompt(skillsBlock: string): string {
   return [
-    "You are a senior software engineer performing a code review.",
-    "Apply ONLY the rules and guidance contained in the provided skills.",
-    "Be specific, pragmatic, and actionable.",
+    "You are a senior software engineer performing a focused code review on a single file's diff.",
+    "Apply ONLY the rules and guidance contained in the provided skills below. Do not invent rules.",
+    "Be specific, pragmatic, and actionable. Quote the offending line where helpful.",
+    "If a skill's rules don't apply to the diff, do not raise findings for that skill.",
+    "If the diff doesn't introduce any issues, return an empty findings array.",
     "",
-    "Return ONLY valid JSON matching this TypeScript shape:",
-    "{ summary: string, findings: Array<{ file: string, line?: number, severity: 'info'|'warning'|'error', skill: string, ruleId?: string, message: string, suggestion?: string }> }",
+    "Output ONLY a single JSON object that matches this TypeScript shape — no prose, no markdown fences:",
+    "{",
+    '  "summary": string,',
+    '  "findings": Array<{',
+    '    "file": string,',
+    '    "line"?: number,',
+    '    "severity": "info" | "warning" | "error",',
+    '    "skill": string,',
+    '    "ruleId"?: string,',
+    '    "message": string,',
+    '    "suggestion"?: string',
+    "  }>",
+    "}",
     "",
     skillsBlock
   ].join("\n");
@@ -16,9 +29,10 @@ export function buildUserPrompt(params: {
   diff: string;
 }): string {
   return [
-    `Review this diff for file: ${params.filePath}`,
+    `File: ${params.filePath}`,
     "",
-    params.diff
+    "Unified diff (review only the additions and modifications, not unchanged context):",
+    "",
+    params.diff.trim()
   ].join("\n");
 }
-

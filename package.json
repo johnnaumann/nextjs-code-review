@@ -1,6 +1,6 @@
 {
   "name": "nextjs-code-review",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-LLM code review CLI for Next.js branches, powered by Ollama and Vercel agent-skills",
   "keywords": [
     "code-review",
@@ -22,8 +22,8 @@
     }
   },
   "bin": {
-    "nextjs-code-review": "dist/cli.js",
-    "code-review": "dist/cli.js"
+    "nextjs-code-review": "dist/cli.cjs",
+    "code-review": "dist/cli.cjs"
   },
   "files": [
     "dist",

@@ -1,9 +1,8 @@
-import { readFile } from "node:fs/promises";
+declare const __PKG_VERSION__: string | undefined;
 
-export async function getPackageVersion(): Promise<string> {
-  const pkgPath = new URL("../package.json", import.meta.url);
-  const raw = await readFile(pkgPath, "utf8");
-  const pkg = JSON.parse(raw) as { version?: string };
-  return pkg.version ?? "0.0.0";
+export function getPackageVersion(): string {
+  if (typeof __PKG_VERSION__ === "string" && __PKG_VERSION__.length > 0) {
+    return __PKG_VERSION__;
+  }
+  return "0.0.0";
 }
-
