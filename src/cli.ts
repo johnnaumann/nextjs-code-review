@@ -1,5 +1,6 @@
 import { Command } from "commander";
 
+import { registerReport } from "./commands/report.js";
 import { registerReview } from "./commands/review.js";
 import { registerSkills } from "./commands/skills.js";
 import { getPackageVersion } from "./core/meta.js";
@@ -12,6 +13,7 @@ async function main(): Promise<void> {
 
   registerReview(program);
   registerSkills(program);
+  registerReport(program);
 
   await program.parseAsync(process.argv);
 }

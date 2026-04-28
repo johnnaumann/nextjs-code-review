@@ -2,7 +2,11 @@ import type { Command } from "commander";
 import ora from "ora";
 import { simpleGit } from "simple-git";
 
-import { computeCacheKey, readCacheEntry, writeCacheEntry } from "../core/cache.js";
+import {
+  computeCacheKey,
+  readCacheEntry,
+  writeCacheEntry
+} from "../core/cache.js";
 import { getBranchName, getDiff } from "../core/git.js";
 import { getPackageVersion } from "../core/meta.js";
 import {
@@ -14,7 +18,10 @@ import { buildSkillsBlock } from "../core/prompt/build.js";
 import { reviewResultSchema, type ReviewResultSchema } from "../core/prompt/schema.js";
 import { buildSystemPrompt, buildUserPrompt } from "../core/prompt/templates.js";
 import { summarizeToConsole } from "../core/report/console.js";
-import { writeMarkdownReport } from "../core/report/markdown.js";
+import {
+  defaultReportPath,
+  writeMarkdownReportToPath
+} from "../core/report/markdown.js";
 import { ensureDefaultSkillsInstalled, readSkillsLock } from "../core/skills/fetcher.js";
 import { loadSkills } from "../core/skills/loader.js";
 import { resolveCacheDir, resolveSkillsDir } from "../core/skills/paths.js";
@@ -148,7 +155,27 @@ export function registerReview(program: Command) {
             temperature
           };
 
+          // Pre-compute the report path so we can flush after every file.
+          // Killing the run mid-flight (Ctrl-C, OOM, etc.) leaves a usable
+          // partial report on disk instead of nothing.
+          const git = simpleGit({ baseDir: cwd });
+          const branch = await getBranchName(git);
+          const reportPath = defaultReportPath(branch);
+          console.log(`Report: ${reportPath}`);
+
           const resultsByFile: Array<{ file: string; result: ReviewResultSchema }> = [];
+
+          // Initial flush so the file is created immediately, even if the
+          // very first review takes a while.
+          await writeMarkdownReportToPath(reportPath, {
+            branch,
+            ...(opts.base ? { base: opts.base } : {}),
+            model,
+            skillsLock: lock,
+            resultsByFile,
+            totalFiles: diffs.length,
+            inProgress: true
+          });
 
           for (const d of diffs) {
             const s = ora(`Reviewing ${d.path}...`).start();
@@ -176,7 +203,16 @@ export function registerReview(program: Command) {
               if (useCache) {
                 const cached = await readCacheEntry<ReviewResultSchema>(cacheDir, cacheKey);
                 if (cached) {
-                  resultsByFile.push({ file: d.path, result: cached });
+                  resultsByFile.push({ file: d.path, result: cached.value });
+                  await flushReport({
+                    reportPath,
+                    branch,
+                    base: opts.base,
+                    model,
+                    skillsLock: lock,
+                    resultsByFile,
+                    totalFiles: diffs.length
+                  });
                   s.succeed(`Reviewed ${d.path} (cached)`);
                   continue;
                 }
@@ -191,29 +227,76 @@ export function registerReview(program: Command) {
               });
 
               if (useCache) {
-                await writeCacheEntry(cacheDir, cacheKey, result);
+                await writeCacheEntry({
+                  cacheDir,
+                  key: cacheKey,
+                  filePath: d.path,
+                  model,
+                  value: result
+                });
               }
               resultsByFile.push({ file: d.path, result });
+              await flushReport({
+                reportPath,
+                branch,
+                base: opts.base,
+                model,
+                skillsLock: lock,
+                resultsByFile,
+                totalFiles: diffs.length
+              });
               s.succeed(`Reviewed ${d.path}`);
             } catch (e) {
               s.fail(`Failed reviewing ${d.path}`);
+              // Make sure the partial report on disk reflects everything
+              // we got through before the failure.
+              await flushReport({
+                reportPath,
+                branch,
+                base: opts.base,
+                model,
+                skillsLock: lock,
+                resultsByFile,
+                totalFiles: diffs.length
+              }).catch(() => {});
               throw e;
             }
           }
 
-          const git = simpleGit({ baseDir: cwd });
-          const branch = await getBranchName(git);
-          const reportPath = await writeMarkdownReport({
+          // Final flush, no longer in-progress.
+          await writeMarkdownReportToPath(reportPath, {
             branch,
             ...(opts.base ? { base: opts.base } : {}),
             model,
             skillsLock: lock,
-            resultsByFile
+            resultsByFile,
+            totalFiles: diffs.length,
+            inProgress: false
           });
 
           summarizeToConsole(reportPath, resultsByFile);
         }
       );
+  });
+}
+
+async function flushReport(params: {
+  reportPath: string;
+  branch: string;
+  base?: string | undefined;
+  model: string;
+  skillsLock: Awaited<ReturnType<typeof readSkillsLock>>;
+  resultsByFile: Array<{ file: string; result: ReviewResultSchema }>;
+  totalFiles: number;
+}): Promise<void> {
+  await writeMarkdownReportToPath(params.reportPath, {
+    branch: params.branch,
+    ...(params.base ? { base: params.base } : {}),
+    model: params.model,
+    skillsLock: params.skillsLock,
+    resultsByFile: params.resultsByFile,
+    totalFiles: params.totalFiles,
+    inProgress: true
   });
 }
 

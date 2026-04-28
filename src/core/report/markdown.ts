@@ -9,7 +9,7 @@ function slugBranch(branch: string): string {
   return branch.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/-+/g, "-");
 }
 
-function timestamp(): string {
+export function timestamp(): string {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(
@@ -17,27 +17,33 @@ function timestamp(): string {
   )}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-export type WriteReportParams = {
+export type ReportFileResult = { file: string; result: ReviewResultSchema };
+
+export type BuildReportParams = {
   branch: string;
   base?: string;
   model: string;
   skillsLock: SkillsLock | null;
-  resultsByFile: Array<{ file: string; result: ReviewResultSchema }>;
+  resultsByFile: ReportFileResult[];
+  /** Optional: total number of files originally planned for the run, for progress headers. */
+  totalFiles?: number;
+  /** Optional: marker to indicate this is a partial / in-flight report. */
+  inProgress?: boolean;
 };
 
-export async function writeMarkdownReport(params: WriteReportParams): Promise<string> {
-  const dir = resolveReportsDir();
-  await mkdir(dir, { recursive: true });
-
-  const fileName = `${slugBranch(params.branch)}-${timestamp()}.md`;
-  const outPath = path.join(dir, fileName);
-
+export function buildMarkdownReport(params: BuildReportParams): string {
   const lines: string[] = [];
-  lines.push(`# Code review report`);
+  lines.push(`# Code review report${params.inProgress ? " (in progress)" : ""}`);
   lines.push("");
   lines.push(`- **branch**: \`${params.branch}\``);
   if (params.base) lines.push(`- **base**: \`${params.base}\``);
   lines.push(`- **model**: \`${params.model}\``);
+
+  if (typeof params.totalFiles === "number") {
+    lines.push(
+      `- **progress**: ${params.resultsByFile.length} / ${params.totalFiles} file(s) reviewed`
+    );
+  }
 
   if (params.skillsLock) {
     lines.push(`- **skills source**: \`${params.skillsLock.source}\``);
@@ -52,6 +58,11 @@ export async function writeMarkdownReport(params: WriteReportParams): Promise<st
   lines.push("");
   lines.push(`## Findings`);
   lines.push("");
+
+  if (params.resultsByFile.length === 0) {
+    lines.push("_No files reviewed yet._");
+    lines.push("");
+  }
 
   for (const { file, result } of params.resultsByFile) {
     lines.push(`### ${file}`);
@@ -85,7 +96,28 @@ export async function writeMarkdownReport(params: WriteReportParams): Promise<st
   lines.push("```");
   lines.push("");
 
-  await writeFile(outPath, lines.join("\n"), "utf8");
-  return outPath;
+  return lines.join("\n");
 }
 
+export function defaultReportPath(branch: string, ts = timestamp()): string {
+  return path.join(resolveReportsDir(), `${slugBranch(branch)}-${ts}.md`);
+}
+
+/** Write a report to a specific path, creating parent dirs as needed. */
+export async function writeMarkdownReportToPath(
+  reportPath: string,
+  params: BuildReportParams
+): Promise<string> {
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, buildMarkdownReport(params), "utf8");
+  return reportPath;
+}
+
+/**
+ * Backward-compatible wrapper: picks a fresh `<branch>-<timestamp>.md` path
+ * inside `.code-review/reports/` and writes the report there.
+ */
+export async function writeMarkdownReport(params: BuildReportParams): Promise<string> {
+  const reportPath = defaultReportPath(params.branch);
+  return writeMarkdownReportToPath(reportPath, params);
+}
